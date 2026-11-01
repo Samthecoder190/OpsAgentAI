@@ -1,68 +1,134 @@
 import json
 import os
-import subprocess
-from pathlib import Path
 
+import requests
 
-def run_shell(command):
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        return {
-            "exit_code": result.returncode,
-            "stdout": result.stdout[:4000],
-            "stderr": result.stderr[:4000],
-        }
-    except Exception as e:
-        return {"exit_code": 1, "stdout": "", "stderr": str(e)}
+from tools import TOOLS
 
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
-def read_file(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()[:6000]
-    except Exception as e:
-        return f"ERROR: {str(e)}"
+SYSTEM_PROMPT = """
+You are a practical operations AI agent.
 
+You must act as a helper that can:
+- think through tasks
+- choose the best tool
+- do real work on files and commands
+- answer with operational, evidence-based results
 
-def list_dir(path):
-    try:
-        entries = []
-        for p in sorted(Path(path).iterdir()):
-            entries.append({
-                "name": p.name,
-                "type": "dir" if p.is_dir() else "file",
-                "path": str(p),
-            })
-        return json.dumps(entries, indent=2)
-    except Exception as e:
-        return f"ERROR: {str(e)}"
-
-
-def search_files(root, query):
-    try:
-        matches = []
-        for path in Path(root).rglob("*"):
-            if path.is_file():
-                try:
-                    text = path.read_text(encoding="utf-8", errors="ignore")
-                except Exception:
-                    continue
-                if query.lower() in text.lower():
-                    matches.append(str(path))
-        return json.dumps(matches[:100], indent=2)
-    except Exception as e:
-        return f"ERROR: {str(e)}"
-
-
-TOOLS = {
-    "run_shell": run_shell,
-    "read_file": read_file,
-    "list_dir": list_dir,
-    "search_files": search_files,
+Return STRICT JSON only:
+{
+  "type": "tool_call" or "final",
+  "tool": "name_of_tool_or_null",
+  "args": {...},
+  "answer": "final answer if type=final"
 }
+
+Rules:
+- Use tool_call when more information is needed.
+- Use final when enough evidence exists to respond.
+- Only use tools from this list: run_shell, read_file, list_dir, search_files
+- Do not invent results.
+- If final, include concrete actions and validation steps.
+"""
+
+
+def ask_llm(system_prompt, user_prompt):
+    payload = {
+        "model": MODEL,
+        "prompt": f"{system_prompt}\n\n{user_prompt}",
+        "stream": False,
+        "options": {
+            "temperature": 0.2,
+        },
+    }
+
+    try:
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "").strip()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(
+            f"Could not reach Ollama at {OLLAMA_URL}. Start Ollama and pull a model first. Details: {exc}"
+        ) from exc
+
+
+class Agent:
+    def __init__(self, tools, working_dir="."):
+        self.tools = tools
+        self.working_dir = working_dir
+        self.memory = []
+
+    def run(self, task, max_steps=8):
+        step = 0
+        while step < max_steps:
+            context = "\n".join(self.memory[-8:]) if self.memory else "No previous tool results."
+            user_prompt = f"""
+Task:
+{task}
+
+Working directory:
+{self.working_dir}
+
+Memory / prior observations:
+{context}
+
+Decide the next action.
+Return JSON only.
+"""
+            raw = ask_llm(SYSTEM_PROMPT, user_prompt)
+            print("LLM decision:", raw)
+
+            try:
+                action = json.loads(raw)
+            except json.JSONDecodeError:
+                return raw
+
+            if action.get("type") == "final":
+                return action.get("answer", raw)
+
+            tool_name = action.get("tool")
+            args = action.get("args", {})
+
+            if tool_name not in self.tools:
+                return f"Tool not allowed: {tool_name}"
+
+            if tool_name in ("read_file", "list_dir", "search_files"):
+                if "path" not in args and "root" not in args:
+                    args["path"] = self.working_dir
+                if "path" in args and not os.path.isabs(args["path"]):
+                    args["path"] = os.path.join(self.working_dir, args["path"])
+                if "root" in args and not os.path.isabs(args["root"]):
+                    args["root"] = os.path.join(self.working_dir, args["root"])
+
+            result = self.tools[tool_name](**args)
+            self.memory.append(
+                f"Step {step}: tool={tool_name}, args={json.dumps(args, default=str)}, result={str(result)[:1500]}"
+            )
+            step += 1
+
+        return "Task ended without reaching a final answer within the step limit."
+
+
+def run_task(task, working_dir="."):
+    agent = Agent(TOOLS, working_dir=working_dir)
+    return agent.run(task)
+
+
+if __name__ == "__main__":
+    prompt = """
+Inspect this project and tell me:
+1) what it appears to be
+2) what files are present
+3) whether it looks like a web app or backend
+4) what the next best action would be
+"""
+    result = run_task(prompt, working_dir=".")
+    print("\nFINAL ANSWER:\n")
+    print(result)

@@ -1,0 +1,21 @@
+from agent import Agent
+from tools import TOOLS
+
+
+def main():
+    task = """
+Inspect this project and tell me:
+1) what it appears to be
+2) what files are present
+3) whether it looks like a web app or backend
+4) what the next best action would be
+"""
+
+    agent = Agent(TOOLS, working_dir=".")
+    answer = agent.run(task)
+    print("\nFINAL ANSWER:\n")
+    print(answer)
+
+
+if __name__ == "__main__":
+    main()

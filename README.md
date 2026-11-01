@@ -1,2 +1,7 @@
-Flask>=3.0.0
-requests>=2.31.0
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+!.env.example
+.DS_Store

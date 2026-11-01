@@ -1,29 +1,48 @@
-from flask import Flask, jsonify, render_template, request
+# OpsAgentAI
 
-from main import run_task
+A local-first autonomous AI agent that plans, uses tools, and answers with real operational context.
 
-app = Flask(__name__)
+## Run against Ollama cloud
 
+1. Create a `.env` file in the repo root.
+2. Add your key:
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+```env
+OLLAMA_API_KEY=your_key_here
+```
 
+3. Install dependencies:
 
-@app.route("/api/chat", methods=["POST"])
-def chat():
-    data = request.get_json(silent=True) or {}
-    prompt = data.get("prompt", "").strip()
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-    if not prompt:
-        return jsonify({"error": "Prompt is required."}), 400
+4. Start the server:
 
-    try:
-        reply = run_task(prompt, working_dir=".")
-        return jsonify({"reply": reply})
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+```bash
+python app.py
+```
 
+5. Send a request:
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+```bash
+curl -X POST http://localhost:5000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Say hello from the Ollama cloud API."}'
+```
+
+This app calls Ollama at `https://ollama.com/api/chat` with the `Authorization: Bearer <key>` header and the model `glm-5.3-flash`.
+
+## Run the CLI version
+
+```bash
+python main.py
+```
+
+## Notes
+
+- Do not commit secrets.
+- Keep the key server-side only.
+- The `.env` file is ignored by Git.
